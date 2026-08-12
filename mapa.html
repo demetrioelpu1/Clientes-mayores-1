@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mapa base + satelital con seguimiento GPS</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+
+<style>
+  :root{
+    --bg:#0E1621;
+    --panel:#16202B;
+    --line:#26374A;
+    --ink:#E6EDF3;
+    --muted:#7D8DA1;
+    --signal:#22D3EE;   /* precisión alta */
+    --warn:#F5A524;     /* precisión media */
+    --weak:#F87171;     /* precisión baja */
+    --radius:10px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    overflow:hidden;
+  }
+  #map{position:absolute;inset:0;background:var(--bg)}
+
+  /* ---- panel de telemetría ---- */
+  .hud{
+    position:absolute;z-index:1000;
+    top:12px;right:12px;width:270px;
+    background:color-mix(in srgb, var(--panel) 92%, transparent);
+    border:1px solid var(--line);border-radius:var(--radius);
+    backdrop-filter:blur(8px);
+    box-shadow:0 10px 30px rgba(0,0,0,.45);
+    overflow:hidden;
+  }
+  .hud__head{
+    display:flex;align-items:center;gap:8px;
+    padding:10px 12px;border-bottom:1px solid var(--line);
+  }
+  .hud__title{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);flex:1}
+  .led{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
+  .led.on{background:var(--signal);box-shadow:0 0 0 0 rgba(34,211,238,.6);animation:ping 1.8s ease-out infinite}
+  @keyframes ping{to{box-shadow:0 0 0 9px rgba(34,211,238,0)}}
+
+  .readout{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;padding:12px}
+  .readout dt{font-size:11px;color:var(--muted);letter-spacing:.04em;align-self:center}
+  .readout dd{
+    margin:0;text-align:right;
+    font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    font-size:13px;font-variant-numeric:tabular-nums;
+  }
+  #accuracy.q-alta{color:var(--signal)}
+  #accuracy.q-media{color:var(--warn)}
+  #accuracy.q-baja{color:var(--weak)}
+
+  .hud__actions{display:flex;gap:6px;padding:0 12px 12px}
+  button{
+    flex:1;padding:8px 6px;border-radius:8px;cursor:pointer;
+    border:1px solid var(--line);background:transparent;color:var(--ink);
+    font:inherit;font-size:12px;transition:background .15s,border-color .15s;
+  }
+  button:hover{background:#1E2C3A}
+  button:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+  button[aria-pressed="true"]{background:var(--signal);border-color:var(--signal);color:#06202A;font-weight:600}
+  button:disabled{opacity:.45;cursor:not-allowed}
+
+  .note{
+    padding:0 12px 12px;font-size:11px;line-height:1.45;color:var(--muted);
+  }
+  .note.error{color:var(--weak)}
+
+  /* ---- punto GPS ---- */
+  .gps-dot{position:relative;width:16px;height:16px}
+  .gps-dot i{
+    position:absolute;inset:0;border-radius:50%;
+    background:var(--signal);border:2px solid #06202A;
+    box-shadow:0 0 8px rgba(34,211,238,.9);
+  }
+  .gps-dot i::after{
+    content:"";position:absolute;inset:-6px;border-radius:50%;
+    border:2px solid var(--signal);opacity:.7;animation:pulse 2s ease-out infinite;
+  }
+  @keyframes pulse{from{transform:scale(.6);opacity:.7}to{transform:scale(1.6);opacity:0}}
+  @media (prefers-reduced-motion:reduce){
+    .gps-dot i::after,.led.on{animation:none}
+  }
+
+  /* ---- controles Leaflet en tema oscuro ---- */
+  .leaflet-control-layers,.leaflet-bar a,.leaflet-control-scale-line{
+    background:var(--panel);color:var(--ink);border-color:var(--line)
+  }
+  .leaflet-bar a{border-bottom-color:var(--line)}
+  .leaflet-bar a:hover{background:#1E2C3A;color:var(--ink)}
+  .leaflet-control-scale-line{border-color:var(--muted)}
+  .leaflet-control-attribution{
+    background:rgba(14,22,33,.8)!important;color:var(--muted)!important;font-size:10px
+  }
+  .leaflet-control-attribution a{color:var(--signal)!important}
+
+  @media (max-width:640px){
+    .hud{top:auto;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));width:auto}
+    .readout{grid-template-columns:repeat(2,auto 1fr)}
+  }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<section class="hud" aria-label="Telemetría de ubicación">
+  <header class="hud__head">
+    <span class="led" id="led" aria-hidden="true"></span>
+    <h1 class="hud__title">Ubicación</h1>
+  </header>
+
+  <dl class="readout">
+    <dt>Latitud</dt>   <dd id="lat">—</dd>
+    <dt>Longitud</dt>  <dd id="lng">—</dd>
+    <dt>Precisión</dt> <dd id="accuracy">—</dd>
+    <dt>Altitud</dt>   <dd id="alt">—</dd>
+    <dt>Velocidad</dt> <dd id="speed">—</dd>
+    <dt>Rumbo</dt>     <dd id="heading">—</dd>
+    <dt>Lecturas</dt>  <dd id="samples">0</dd>
+  </dl>
+
+  <div class="hud__actions">
+    <button id="btnWatch" type="button">Iniciar</button>
+    <button id="btnFollow" type="button" aria-pressed="false" disabled>Seguir</button>
+    <button id="btnCenter" type="button" disabled>Centrar</button>
+  </div>
+
+  <p class="note" id="note">Pulsa Iniciar y acepta el permiso de ubicación.</p>
+</section>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="./geolocation.service.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  /* =========================================================
+     1. MAPAS BASE
+     ========================================================= */
+
+  // Nivel al que las teselas dejan de existir de verdad; por encima Leaflet
+  // reescala la imagen en vez de mostrar un cuadro gris.
+  var MAX_ZOOM = 22;
+
+  var osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: MAX_ZOOM,
+    maxNativeZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+  });
+
+  // Esri World Imagery: gratuito, sin API key, cobertura mundial.
+  // Hasta 1 m o mejor en casi todo el mundo y hasta ~0,3 m en zonas urbanas.
+  var satelital = L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: MAX_ZOOM,
+      maxNativeZoom: 19,
+      attribution: 'Imágenes &copy; Esri, Maxar, Earthstar Geographics'
+    });
+
+  // Etiquetas transparentes: la foto sola no tiene nombres de calles.
+  var etiquetas = L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: MAX_ZOOM,
+      maxNativeZoom: 19,
+      pane: 'shadowPane'
+    });
+
+  var hibrido = L.layerGroup([satelital, etiquetas]);
+
+  var map = L.map('map', {
+    center: [-15.4997, -70.1333],   // Juliaca, Puno
+    zoom: 15,
+    maxZoom: MAX_ZOOM,
+    zoomControl: false,
+    layers: [osm]
+  });
+
+  L.control.zoom({ position: 'topleft' }).addTo(map);
+  L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map);
+  L.control.layers({
+    'Calles (OSM)': osm,
+    'Satélite': satelital,
+    'Satélite + nombres': hibrido
+  }, null, { position: 'topleft', collapsed: false }).addTo(map);
+
+  /* =========================================================
+     2. SEGUIMIENTO DE UBICACIÓN
+     ========================================================= */
+
+  var geo = new GeolocationService({
+    enableHighAccuracy: true,
+    timeout: 15000,
+    maximumAge: 0,
+    maxAccuracy: 100,   // ignora lecturas por antena/wifi de más de 100 m
+    minDistance: 2      // ignora la deriva del GPS cuando estás quieto
+  });
+
+  var marcador = null, circulo = null, rastro = null, siguiendo = false;
+
+  var icono = L.divIcon({
+    className: '',
+    html: '<span class="gps-dot"><i></i></span>',
+    iconSize: [16, 16],
+    iconAnchor: [8, 8]
+  });
+
+  var $ = function (id) { return document.getElementById(id); };
+  var btnWatch = $('btnWatch'), btnFollow = $('btnFollow'), btnCenter = $('btnCenter');
+
+  geo.on('position', function (p) {
+    var latlng = [p.lat, p.lng];
+
+    if (!marcador) {
+      circulo = L.circle(latlng, {
+        radius: p.accuracy,
+        color: '#22D3EE', weight: 1, fillColor: '#22D3EE', fillOpacity: .12
+      }).addTo(map);
+      marcador = L.marker(latlng, { icon: icono, zIndexOffset: 1000 }).addTo(map);
+      rastro = L.polyline([latlng], { color: '#22D3EE', weight: 2, opacity: .55 }).addTo(map);
+
+      map.fitBounds(circulo.getBounds(), { maxZoom: 18 });
+      setFollow(true);
+      btnFollow.disabled = btnCenter.disabled = false;
+    } else {
+      marcador.setLatLng(latlng);
+      circulo.setLatLng(latlng).setRadius(p.accuracy);
+      rastro.addLatLng(latlng);
+    }
+
+    if (siguiendo) map.panTo(latlng, { animate: true, duration: .5 });
+
+    pintar(p);
+    nota('Actualizado ' + new Date(p.timestamp).toLocaleTimeString('es-PE'), false);
+  });
+
+  geo.on('error', function (e) {
+    nota(e.message, true);
+    if (e.code === 1) sync();
+  });
+
+  geo.on('status', function (s) {
+    if ('watching' in s) sync();
+    if (s.rejected === 'accuracy') {
+      nota('Buscando señal… lectura de ±' + Math.round(s.accuracy) + ' m descartada.', false);
+    }
+    $('samples').textContent = geo.samples;
+  });
+
+  /* ---- pintar la telemetría ---- */
+  function pintar(p) {
+    $('lat').textContent = p.lat.toFixed(6) + '°';
+    $('lng').textContent = p.lng.toFixed(6) + '°';
+
+    var q = GeolocationService.quality(p.accuracy);
+    var acc = $('accuracy');
+    acc.textContent = '± ' + p.accuracy.toFixed(1) + ' m';
+    acc.className = 'q-' + q;
+
+    $('alt').textContent = p.altitude != null ? p.altitude.toFixed(0) + ' m' : '—';
+    $('speed').textContent = p.speed != null ? (p.speed * 3.6).toFixed(1) + ' km/h' : '—';
+    $('heading').textContent = p.heading != null ? p.heading.toFixed(0) + '°' : '—';
+    $('samples').textContent = geo.samples;
+  }
+
+  function nota(texto, esError) {
+    var n = $('note');
+    n.textContent = texto;
+    n.className = esError ? 'note error' : 'note';
+  }
+
+  function setFollow(valor) {
+    siguiendo = valor;
+    btnFollow.setAttribute('aria-pressed', String(valor));
+    btnFollow.textContent = valor ? 'Siguiendo' : 'Seguir';
+  }
+
+  function sync() {
+    btnWatch.textContent = geo.watching ? 'Detener' : 'Iniciar';
+    $('led').classList.toggle('on', geo.watching);
+    if (!geo.watching) setFollow(false);
+  }
+
+  /* ---- controles ---- */
+  btnWatch.addEventListener('click', function () {
+    if (geo.watching) { geo.stop(); nota('Seguimiento detenido.', false); }
+    else { geo.start(); nota('Buscando señal…', false); }
+    sync();
+  });
+
+  btnFollow.addEventListener('click', function () {
+    setFollow(!siguiendo);
+    if (siguiendo && geo.last) map.panTo([geo.last.lat, geo.last.lng]);
+  });
+
+  btnCenter.addEventListener('click', function () {
+    if (circulo) map.fitBounds(circulo.getBounds(), { maxZoom: 18 });
+  });
+
+  // Si el usuario arrastra el mapa, el seguimiento estorba: se apaga solo.
+  // panTo() programático no dispara 'dragstart', así que no hay falsos positivos.
+  map.on('dragstart', function () { if (siguiendo) setFollow(false); });
+
+  /* ---- estado inicial ---- */
+  if (!GeolocationService.isSupported()) {
+    btnWatch.disabled = true;
+    nota('Este navegador no soporta geolocalización.', true);
+  } else if (!window.isSecureContext) {
+    nota('Abre la página en https:// o localhost: el navegador bloquea el GPS en file://', true);
+  } else {
+    geo.permission().then(function (estado) {
+      if (estado === 'granted') { geo.start(); sync(); }
+      else if (estado === 'denied') nota('Permiso bloqueado. Habilítalo en los ajustes del sitio.', true);
+    });
+  }
+})();
+</script>
+</body>
+</html>
