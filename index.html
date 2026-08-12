@@ -96,6 +96,9 @@
   @media (prefers-reduced-motion:reduce){.gps-dot i::after,.led.on{animation:none}}
 
   .leaflet-control-layers,.leaflet-bar a{background:var(--panel);color:var(--ink);border-color:var(--line)}
+  .leaflet-control-layers-expanded{padding:7px 10px 7px 8px;font-size:12px;line-height:1.9}
+  .leaflet-control-layers-expanded label{margin:0;cursor:pointer}
+  .leaflet-control-layers-selector{margin-right:5px;accent-color:#22D3EE}
   .leaflet-bar a{border-bottom-color:var(--line)}
   .leaflet-bar a:hover{background:#1E2C3A;color:var(--ink)}
   .leaflet-control-scale-line{background:var(--panel);color:var(--ink);border-color:var(--muted)}
@@ -175,6 +178,8 @@
       <select id="capaSel">
         <option value="sat">Satélite</option>
         <option value="hib" selected>Satélite + nombres</option>
+        <option value="cal">Calles</option>
+        <option value="todo">Satélite + nombres + calles</option>
       </select></label>
 
     <p class="est" id="est">Encuadra un área en el mapa para calcular su tamaño.</p>
@@ -203,7 +208,10 @@
   var MAX_ZOOM = 22;
   var CAPAS = {
     s: { id: 's', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', kb: 25 },
-    l: { id: 'l', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', kb: 5 }
+    l: { id: 'l', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', kb: 5 },
+    // Callejero de Esri: mismas condiciones que la imagen satelital, sin token,
+    // y SI se puede guardar en el archivo .mapa (a diferencia de OSM).
+    c: { id: 'c', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', kb: 18 }
   };
 
   var satelital = L.tileLayer.archivo(CAPAS.s.url, {
@@ -213,6 +221,11 @@
   var etiquetas = L.tileLayer.archivo(CAPAS.l.url, {
     capaId: 'l', maxZoom: MAX_ZOOM, maxNativeZoom: 19, pane: 'shadowPane'
   });
+  var calles = L.tileLayer.archivo(CAPAS.c.url, {
+    capaId: 'c', maxZoom: MAX_ZOOM, maxNativeZoom: 19,
+    attribution: '&copy; Esri, HERE, Garmin, &copy; colaboradores de OpenStreetMap'
+  });
+
   var osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: MAX_ZOOM, maxNativeZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -225,8 +238,12 @@
   });
   L.control.zoom({ position: 'topleft' }).addTo(map);
   L.control.scale({ imperial: false, position: 'bottomright' }).addTo(map);
-  L.control.layers({ 'Satélite + nombres': hibrido, 'Satélite': satelital, 'Calles (OSM, requiere internet)': osm },
-                   null, { position: 'topleft', collapsed: true }).addTo(map);
+  L.control.layers({
+    'Satélite + nombres': hibrido,
+    'Satélite': satelital,
+    'Calles': calles,
+    'Calles OSM (solo con internet)': osm
+  }, null, { position: 'topleft', collapsed: false }).addTo(map);
 
   /* =========================================================
      2. GPS
@@ -299,7 +316,12 @@
   });
 
   function capasElegidas() {
-    return $('capaSel').value === 'hib' ? [CAPAS.s, CAPAS.l] : [CAPAS.s];
+    switch ($('capaSel').value) {
+      case 'hib':  return [CAPAS.s, CAPAS.l];
+      case 'cal':  return [CAPAS.c];
+      case 'todo': return [CAPAS.s, CAPAS.l, CAPAS.c];
+      default:     return [CAPAS.s];
+    }
   }
   // Cinco niveles por debajo del detalle máximo: da contexto al alejarse
   // sin multiplicar el peso (cada nivel abajo pesa la cuarta parte).
@@ -439,7 +461,7 @@
     });
   }
 
-  function recargarCapas() { satelital.redraw(); etiquetas.redraw(); }
+  function recargarCapas() { satelital.redraw(); etiquetas.redraw(); calles.redraw(); }
 
   /* =========================================================
      5. PANEL Y ARRANQUE
