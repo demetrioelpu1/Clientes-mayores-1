@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0E1621">
+<title>Mapa de campo</title>
+<link rel="manifest" href="./manifest.json">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+<style>
+  :root{
+    --bg:#0E1621; --panel:#16202B; --line:#26374A;
+    --ink:#E6EDF3; --muted:#7D8DA1;
+    --signal:#22D3EE; --warn:#F5A524; --weak:#F87171; --ok:#4ADE80;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--ink);
+       font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+  #map{position:absolute;inset:0;background:var(--bg)}
+
+  .card{background:color-mix(in srgb,var(--panel) 94%,transparent);border:1px solid var(--line);
+        border-radius:10px;backdrop-filter:blur(8px);box-shadow:0 10px 30px rgba(0,0,0,.45)}
+  .card__head{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line)}
+  .card__title{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);flex:1;margin:0}
+
+  /* telemetría */
+  .hud{position:absolute;z-index:1000;top:12px;right:12px;width:250px;overflow:hidden}
+  .led{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
+  .led.on{background:var(--signal);box-shadow:0 0 0 0 rgba(34,211,238,.6);animation:ping 1.8s ease-out infinite}
+  @keyframes ping{to{box-shadow:0 0 0 9px rgba(34,211,238,0)}}
+  .readout{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;padding:12px;margin:0}
+  .readout dt{font-size:11px;color:var(--muted);align-self:center}
+  .readout dd{margin:0;text-align:right;font-family:ui-monospace,Menlo,Consolas,monospace;
+              font-size:13px;font-variant-numeric:tabular-nums}
+  #accuracy.q-alta{color:var(--signal)} #accuracy.q-media{color:var(--warn)} #accuracy.q-baja{color:var(--weak)}
+
+  .actions{display:flex;gap:6px;padding:0 12px 12px}
+  button,.filebtn{border:1px solid var(--line);background:transparent;color:var(--ink);font:inherit;
+    font-size:12px;padding:8px 10px;border-radius:8px;cursor:pointer;transition:background .15s}
+  .actions button{flex:1}
+  button:hover:not(:disabled),.filebtn:hover{background:#1E2C3A}
+  button:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+  button[aria-pressed="true"]{background:var(--signal);border-color:var(--signal);color:#06202A;font-weight:600}
+  button.primary{background:var(--signal);border-color:var(--signal);color:#06202A;font-weight:600}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .note{padding:0 12px 12px;margin:0;font-size:11px;line-height:1.45;color:var(--muted)}
+  .note.error{color:var(--weak)} .note.ok{color:var(--ok)}
+
+  /* panel de mapas */
+  .fab{position:absolute;z-index:1000;left:12px;bottom:30px;border-radius:999px;padding:9px 15px;
+       background:var(--panel);box-shadow:0 6px 20px rgba(0,0,0,.4)}
+  .fab.aviso{border-color:var(--warn);color:var(--warn)}
+  .mp{position:absolute;z-index:1001;left:12px;bottom:30px;width:310px;max-height:calc(100% - 56px);
+      overflow:auto;overscroll-behavior:contain}
+  .mp[hidden]{display:none}
+  .icon{padding:2px 8px;border-color:transparent;color:var(--muted)}
+
+  .tabs{display:flex;border-bottom:1px solid var(--line)}
+  .tabs button{flex:1;border:0;border-radius:0;border-bottom:2px solid transparent;color:var(--muted);padding:9px 0}
+  .tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--signal)}
+
+  .field{display:flex;align-items:center;gap:10px;padding:10px 12px 0}
+  .field span{font-size:11px;color:var(--muted);width:52px;flex:none}
+  select,input[type=text]{flex:1;min-width:0;background:#0F1925;color:var(--ink);border:1px solid var(--line);
+    border-radius:8px;padding:7px 8px;font:inherit;font-size:12px}
+  input[type=text]::placeholder{color:#4A5C70}
+
+  .est{margin:10px 12px 0;padding:9px 10px;background:#0F1925;border:1px solid var(--line);border-radius:8px;
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.65;font-variant-numeric:tabular-nums}
+  .est b{color:var(--signal);font-weight:600}
+  .est .pesado{color:var(--warn)}
+  .bar{height:4px;margin:10px 12px 0;background:#0F1925;border-radius:2px;overflow:hidden}
+  .bar i{display:block;height:100%;width:0;background:var(--signal);transition:width .25s}
+
+  .lista{margin:0;padding:10px 12px 0;list-style:none}
+  .lista li{display:flex;align-items:center;gap:8px;padding:8px 10px;margin-bottom:6px;
+    background:#0F1925;border:1px solid var(--line);border-radius:8px}
+  .lista .n{flex:1;min-width:0}
+  .lista .n b{display:block;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lista .n small{font-size:10px;color:var(--muted);font-family:ui-monospace,Menlo,monospace}
+  .lista button{padding:5px 8px;font-size:11px}
+  .vacio{padding:14px 12px;margin:0;font-size:11px;color:var(--muted);text-align:center;line-height:1.5}
+  .filebtn{display:block;margin:10px 12px 0;text-align:center}
+  input[type=file]{position:absolute;width:1px;height:1px;opacity:0}
+  label.check{display:flex;gap:8px;align-items:center;padding:10px 12px 0;font-size:11px;color:var(--muted)}
+
+  /* punto GPS */
+  .gps-dot{position:relative;width:16px;height:16px}
+  .gps-dot i{position:absolute;inset:0;border-radius:50%;background:var(--signal);
+    border:2px solid #06202A;box-shadow:0 0 8px rgba(34,211,238,.9)}
+  .gps-dot i::after{content:"";position:absolute;inset:-6px;border-radius:50%;border:2px solid var(--signal);
+    opacity:.7;animation:pulse 2s ease-out infinite}
+  @keyframes pulse{from{transform:scale(.6);opacity:.7}to{transform:scale(1.6);opacity:0}}
+  @media (prefers-reduced-motion:reduce){.gps-dot i::after,.led.on{animation:none}}
+
+  .leaflet-control-layers,.leaflet-bar a{background:var(--panel);color:var(--ink);border-color:var(--line)}
+  .leaflet-bar a{border-bottom-color:var(--line)}
+  .leaflet-bar a:hover{background:#1E2C3A;color:var(--ink)}
+  .leaflet-control-scale-line{background:var(--panel);color:var(--ink);border-color:var(--muted)}
+  .leaflet-control-attribution{background:rgba(14,22,33,.8)!important;color:var(--muted)!important;font-size:10px}
+  .leaflet-control-attribution a{color:var(--signal)!important}
+  .area-box{stroke:#22D3EE;stroke-dasharray:6 4;fill:#22D3EE;fill-opacity:.07}
+  .area-guardada{stroke:#4ADE80;stroke-dasharray:2 4;fill:#4ADE80;fill-opacity:.04}
+
+  @media (max-width:640px){
+    .hud{top:auto;left:12px;right:12px;bottom:calc(60px + env(safe-area-inset-bottom));width:auto}
+    .readout{grid-template-columns:repeat(2,auto 1fr)}
+    .fab{bottom:calc(12px + env(safe-area-inset-bottom))}
+    .mp{left:8px;right:8px;width:auto;bottom:calc(8px + env(safe-area-inset-bottom))}
+  }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<section class="hud card" aria-label="Ubicación">
+  <header class="card__head"><span class="led" id="led" aria-hidden="true"></span>
+    <h1 class="card__title">Ubicación</h1></header>
+  <dl class="readout">
+    <dt>Latitud</dt><dd id="lat">—</dd>
+    <dt>Longitud</dt><dd id="lng">—</dd>
+    <dt>Precisión</dt><dd id="accuracy">—</dd>
+    <dt>Altitud</dt><dd id="alt">—</dd>
+    <dt>Velocidad</dt><dd id="speed">—</dd>
+  </dl>
+  <div class="actions">
+    <button id="btnWatch" type="button">Iniciar</button>
+    <button id="btnFollow" type="button" aria-pressed="false" disabled>Seguir</button>
+    <button id="btnCenter" type="button" disabled>Centrar</button>
+  </div>
+  <p class="note" id="note">Pulsa Iniciar y acepta el permiso de ubicación.</p>
+</section>
+
+<button class="fab" id="mpOpen" type="button">Archivos de mapa</button>
+
+<section class="mp card" id="mp" hidden aria-label="Archivos de mapa">
+  <header class="card__head">
+    <h2 class="card__title" id="mpTitulo">Archivos de mapa</h2>
+    <button class="icon" id="mpClose" type="button" aria-label="Cerrar">✕</button>
+  </header>
+
+  <div class="tabs" role="tablist">
+    <button id="tabAbrir" role="tab" aria-selected="true" type="button">Abrir</button>
+    <button id="tabCrear" role="tab" aria-selected="false" type="button">Crear</button>
+  </div>
+
+  <!-- ---------- ABRIR ---------- -->
+  <div id="panelAbrir">
+    <label class="filebtn" for="fileInput">Abrir archivo .mapa del dispositivo</label>
+    <input type="file" id="fileInput" accept=".mapa,application/octet-stream" multiple>
+    <ul class="lista" id="listaArchivos"></ul>
+    <p class="vacio" id="sinArchivos">Ningún mapa cargado.<br>Abre un archivo .mapa para trabajar sin internet.</p>
+    <p class="note" id="notaAbrir"></p>
+  </div>
+
+  <!-- ---------- CREAR ---------- -->
+  <div id="panelCrear" hidden>
+    <div class="actions" style="padding-top:10px">
+      <button id="btnDibujar" type="button">Encuadrar área</button>
+      <button id="btnVista" type="button">Usar la vista</button>
+    </div>
+    <label class="field"><span>Nombre</span>
+      <input type="text" id="nombreArea" placeholder="Ej: Sector Taparachi" maxlength="48"></label>
+    <label class="field"><span>Detalle</span>
+      <select id="zoomMax">
+        <option value="16">Manzanas (z16)</option>
+        <option value="17" selected>Calles (z17)</option>
+        <option value="18">Detalle máximo (z18)</option>
+        <option value="19">Nativo Esri (z19)</option>
+      </select></label>
+    <label class="field"><span>Capa</span>
+      <select id="capaSel">
+        <option value="sat">Satélite</option>
+        <option value="hib" selected>Satélite + nombres</option>
+      </select></label>
+
+    <p class="est" id="est">Encuadra un área en el mapa para calcular su tamaño.</p>
+    <div class="bar"><i id="barra"></i></div>
+    <div class="actions">
+      <button id="btnCrear" class="primary" type="button" disabled>Crear archivo</button>
+      <button id="btnCancelar" type="button" hidden>Cancelar</button>
+    </div>
+    <p class="note" id="notaCrear">Hazlo con wifi. El archivo se guarda en tus descargas.</p>
+  </div>
+</section>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="./geolocation.service.js"></script>
+<script src="./map-archive.js"></script>
+<script src="./offline-layer.js"></script>
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+
+  /* =========================================================
+     1. CAPAS
+     ========================================================= */
+  var MAX_ZOOM = 22;
+  var CAPAS = {
+    s: { id: 's', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', kb: 25 },
+    l: { id: 'l', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', kb: 5 }
+  };
+
+  var satelital = L.tileLayer.archivo(CAPAS.s.url, {
+    capaId: 's', maxZoom: MAX_ZOOM, maxNativeZoom: 19,
+    attribution: 'Imágenes &copy; Esri, Maxar, Earthstar Geographics'
+  });
+  var etiquetas = L.tileLayer.archivo(CAPAS.l.url, {
+    capaId: 'l', maxZoom: MAX_ZOOM, maxNativeZoom: 19, pane: 'shadowPane'
+  });
+  var osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: MAX_ZOOM, maxNativeZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+  });
+  var hibrido = L.layerGroup([satelital, etiquetas]);
+
+  var map = L.map('map', {
+    center: [-15.4997, -70.1333], zoom: 14, maxZoom: MAX_ZOOM,
+    zoomControl: false, layers: [hibrido]
+  });
+  L.control.zoom({ position: 'topleft' }).addTo(map);
+  L.control.scale({ imperial: false, position: 'bottomright' }).addTo(map);
+  L.control.layers({ 'Satélite + nombres': hibrido, 'Satélite': satelital, 'Calles (OSM, requiere internet)': osm },
+                   null, { position: 'topleft', collapsed: true }).addTo(map);
+
+  /* =========================================================
+     2. GPS
+     ========================================================= */
+  var geo = new GeolocationService({ enableHighAccuracy: true, timeout: 15000,
+                                     maximumAge: 0, maxAccuracy: 100, minDistance: 2 });
+  var marcador = null, circulo = null, rastro = null, siguiendo = false;
+  var icono = L.divIcon({ className: '', html: '<span class="gps-dot"><i></i></span>',
+                          iconSize: [16, 16], iconAnchor: [8, 8] });
+  var btnWatch = $('btnWatch'), btnFollow = $('btnFollow'), btnCenter = $('btnCenter');
+
+  geo.on('position', function (p) {
+    var ll = [p.lat, p.lng];
+    if (!marcador) {
+      circulo = L.circle(ll, { radius: p.accuracy, color: '#22D3EE', weight: 1,
+                               fillColor: '#22D3EE', fillOpacity: .12 }).addTo(map);
+      marcador = L.marker(ll, { icon: icono, zIndexOffset: 1000 }).addTo(map);
+      rastro = L.polyline([ll], { color: '#22D3EE', weight: 2, opacity: .55 }).addTo(map);
+      map.fitBounds(circulo.getBounds(), { maxZoom: 18 });
+      setFollow(true); btnFollow.disabled = btnCenter.disabled = false;
+    } else {
+      marcador.setLatLng(ll); circulo.setLatLng(ll).setRadius(p.accuracy); rastro.addLatLng(ll);
+    }
+    if (siguiendo) map.panTo(ll, { animate: true, duration: .5 });
+    pintar(p);
+    nota('Actualizado ' + new Date(p.timestamp).toLocaleTimeString('es-PE'), '');
+  });
+  geo.on('error', function (e) { nota(e.message, 'error'); if (e.code === 1) sync(); });
+  geo.on('status', function (s) {
+    if ('watching' in s) sync();
+    if (s.rejected === 'accuracy') nota('Buscando señal… ±' + Math.round(s.accuracy) + ' m descartado.', '');
+  });
+
+  function pintar(p) {
+    $('lat').textContent = p.lat.toFixed(6) + '°';
+    $('lng').textContent = p.lng.toFixed(6) + '°';
+    var a = $('accuracy');
+    a.textContent = '± ' + p.accuracy.toFixed(1) + ' m';
+    a.className = 'q-' + GeolocationService.quality(p.accuracy);
+    $('alt').textContent = p.altitude != null ? p.altitude.toFixed(0) + ' m' : '—';
+    $('speed').textContent = p.speed != null ? (p.speed * 3.6).toFixed(1) + ' km/h' : '—';
+  }
+  function nota(t, c) { var n = $('note'); n.textContent = t; n.className = 'note ' + c; }
+  function setFollow(v) { siguiendo = v; btnFollow.setAttribute('aria-pressed', String(v));
+                          btnFollow.textContent = v ? 'Siguiendo' : 'Seguir'; }
+  function sync() { btnWatch.textContent = geo.watching ? 'Detener' : 'Iniciar';
+                    $('led').classList.toggle('on', geo.watching); if (!geo.watching) setFollow(false); }
+
+  btnWatch.addEventListener('click', function () {
+    if (geo.watching) { geo.stop(); nota('Seguimiento detenido.', ''); }
+    else { geo.start(); nota('Buscando señal…', ''); } sync();
+  });
+  btnFollow.addEventListener('click', function () {
+    setFollow(!siguiendo); if (siguiendo && geo.last) map.panTo([geo.last.lat, geo.last.lng]);
+  });
+  btnCenter.addEventListener('click', function () {
+    if (circulo) map.fitBounds(circulo.getBounds(), { maxZoom: 18 });
+  });
+  map.on('dragstart', function () { if (siguiendo) setFollow(false); });
+
+  /* =========================================================
+     3. CREAR ARCHIVO DE MAPA
+     ========================================================= */
+  var seleccionado = null, control = { cancelado: false }, contornos = [];
+
+  var selector = AreaSelector(map, {
+    onCambio: function (b, arrastrando) { seleccionado = b; calcular(); },
+    onFin: function () { $('btnDibujar').setAttribute('aria-pressed', 'false');
+                         $('btnDibujar').textContent = 'Encuadrar área'; }
+  });
+
+  function capasElegidas() {
+    return $('capaSel').value === 'hib' ? [CAPAS.s, CAPAS.l] : [CAPAS.s];
+  }
+  // Cinco niveles por debajo del detalle máximo: da contexto al alejarse
+  // sin multiplicar el peso (cada nivel abajo pesa la cuarta parte).
+  function zoomMinimo(zMax) { return Math.max(8, zMax - 5); }
+
+  function calcular() {
+    var btn = $('btnCrear');
+    if (!seleccionado) {
+      $('est').textContent = 'Encuadra un área en el mapa para calcular su tamaño.';
+      btn.disabled = true; return null;
+    }
+    var zMax = parseInt($('zoomMax').value, 10);
+    var est = MapArchive.estimar(seleccionado, zoomMinimo(zMax), zMax, capasElegidas());
+    var d = MapArchive.dimensiones(seleccionado);
+    var pesado = est.mb > 300;
+
+    $('est').innerHTML =
+      d.anchoKm.toFixed(1) + ' × ' + d.altoKm.toFixed(1) + ' km<br>' +
+      '<b>' + est.teselas.toLocaleString('es-PE') + '</b> teselas · ' +
+      '<span class="' + (pesado ? 'pesado' : '') + '">≈ ' + Math.round(est.mb) + ' MB</span><br>' +
+      '<span style="color:var(--muted)">zoom ' + zoomMinimo(zMax) + '–' + zMax + '</span>';
+
+    btn.disabled = est.teselas > 80000;
+    if (btn.disabled) $('notaCrear').textContent = 'Área demasiado grande. Reduce el detalle o encuadra menos.';
+    return est;
+  }
+
+  $('btnDibujar').addEventListener('click', function () {
+    if (selector.activo) { selector.detener(); return; }
+    selector.iniciar();
+    this.setAttribute('aria-pressed', 'true');
+    this.textContent = 'Arrastra en el mapa…';
+  });
+
+  $('btnVista').addEventListener('click', function () {
+    seleccionado = map.getBounds();
+    selector.mostrar(seleccionado);
+    calcular();
+  });
+
+  $('zoomMax').addEventListener('change', calcular);
+  $('capaSel').addEventListener('change', calcular);
+
+  $('btnCrear').addEventListener('click', function () {
+    var est = calcular();
+    if (!est) return;
+    var nombre = ($('nombreArea').value || '').trim() || 'Área ' + new Date().toLocaleDateString('es-PE');
+    if (est.mb > 300 && !confirm('El archivo pesará unos ' + Math.round(est.mb) +
+        ' MB. En celular conviene crearlo en la PC y pasarlo después. ¿Continuar?')) return;
+
+    control = { cancelado: false };
+    $('btnCrear').hidden = true; $('btnCancelar').hidden = false;
+
+    MapArchive.crear({
+      lista: est.lista, bounds: seleccionado, nombre: nombre,
+      zoomMin: zoomMinimo(parseInt($('zoomMax').value, 10)),
+      zoomMax: parseInt($('zoomMax').value, 10),
+      capas: capasElegidas(), control: control,
+      onProgreso: function (hechas, total, mb) {
+        $('barra').style.width = (hechas / total * 100) + '%';
+        $('notaCrear').textContent = hechas.toLocaleString('es-PE') + ' de ' +
+          total.toLocaleString('es-PE') + ' · ' + mb.toFixed(1) + ' MB';
+        $('notaCrear').className = 'note';
+      }
+    }).then(function (r) {
+      $('btnCrear').hidden = false; $('btnCancelar').hidden = true;
+      $('barra').style.width = '0';
+      if (r.cancelado) { $('notaCrear').textContent = 'Cancelado.'; return; }
+
+      MapArchive.guardar(r.blob, nombre);
+      $('notaCrear').textContent = 'Archivo guardado' +
+        (r.fallidas ? ' con ' + r.fallidas + ' teselas fallidas.' : '. Ábrelo en la pestaña Abrir para probarlo.');
+      $('notaCrear').className = 'note ok';
+    });
+  });
+
+  $('btnCancelar').addEventListener('click', function () { control.cancelado = true; });
+
+  /* =========================================================
+     4. ABRIR ARCHIVOS
+     ========================================================= */
+  $('fileInput').addEventListener('change', function (ev) {
+    var files = Array.prototype.slice.call(ev.target.files || []);
+    ev.target.value = '';
+    files.reduce(function (p, f) {
+      return p.then(function () {
+        return MapArchive.abrir(f)
+          // Lo recordamos en el dispositivo: si la pagina se recarga en pleno
+          // campo, el mapa vuelve solo sin volver a buscar el archivo.
+          .then(function (a) { return MapArchive.recordar(a).catch(function () {}); })
+          .catch(function (e) { $('notaAbrir').textContent = f.name + ': ' + e.message;
+                                $('notaAbrir').className = 'note error'; });
+      });
+    }, Promise.resolve()).then(function () {
+      refrescarLista(); redibujar(); recargarCapas();
+      var ult = MapArchive.abiertos[MapArchive.abiertos.length - 1];
+      if (ult) map.fitBounds(ult.bounds, { padding: [20, 20] });
+    });
+  });
+
+  function refrescarLista() {
+    var ul = $('listaArchivos'), abiertos = MapArchive.abiertos;
+    ul.innerHTML = '';
+    $('sinArchivos').hidden = abiertos.length > 0;
+    $('mpOpen').classList.toggle('aviso', abiertos.length === 0 && !navigator.onLine);
+
+    abiertos.forEach(function (a) {
+      var li = document.createElement('li');
+      var info = document.createElement('div');
+      info.className = 'n';
+      info.innerHTML = '<b></b><small>' + Math.round(a.meta.bytes / 1048576) + ' MB · z' +
+        a.meta.zoomMin + '–' + a.meta.zoomMax + ' · ' +
+        a.meta.teselas.toLocaleString('es-PE') + ' teselas</small>';
+      info.querySelector('b').textContent = a.meta.nombre;
+
+      var ir = document.createElement('button');
+      ir.textContent = 'Ir';
+      ir.onclick = function () { map.fitBounds(a.bounds, { padding: [20, 20] }); };
+
+      var quitar = document.createElement('button');
+      quitar.textContent = '✕'; quitar.title = 'Quitar';
+      quitar.onclick = function () {
+        MapArchive.cerrar(a.id); MapArchive.olvidar(a.id).catch(function () {});
+        refrescarLista(); redibujar(); recargarCapas();
+      };
+
+      li.appendChild(info); li.appendChild(ir); li.appendChild(quitar);
+      ul.appendChild(li);
+    });
+  }
+
+  /** Contorno verde de cada área disponible: se ve de un vistazo dónde hay mapa. */
+  function redibujar() {
+    contornos.forEach(function (c) { map.removeLayer(c); });
+    contornos = MapArchive.abiertos.map(function (a) {
+      return L.rectangle(a.bounds, { className: 'area-guardada', weight: 1, interactive: false }).addTo(map);
+    });
+  }
+
+  function recargarCapas() { satelital.redraw(); etiquetas.redraw(); }
+
+  /* =========================================================
+     5. PANEL Y ARRANQUE
+     ========================================================= */
+  function pestania(cual) {
+    var abrir = cual === 'abrir';
+    $('tabAbrir').setAttribute('aria-selected', String(abrir));
+    $('tabCrear').setAttribute('aria-selected', String(!abrir));
+    $('panelAbrir').hidden = !abrir;
+    $('panelCrear').hidden = abrir;
+    if (!abrir) calcular();
+  }
+  $('tabAbrir').addEventListener('click', function () { pestania('abrir'); });
+  $('tabCrear').addEventListener('click', function () { pestania('crear'); });
+
+  $('mpOpen').addEventListener('click', function () {
+    $('mp').hidden = false; this.hidden = true; refrescarLista();
+  });
+  $('mpClose').addEventListener('click', function () {
+    $('mp').hidden = true; $('mpOpen').hidden = false;
+    if (selector.activo) selector.detener();
+  });
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js').catch(function (e) { console.warn('SW:', e); });
+  }
+  if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+
+  // Reabre los archivos usados la última vez: al recargar en el campo,
+  // el mapa sigue ahí sin volver a buscar el archivo.
+  MapArchive.recordados().then(function (lista) {
+    if (!lista.length) return;
+    refrescarLista(); redibujar(); recargarCapas();
+    $('notaAbrir').textContent = lista.length + ' mapa(s) recuperados de este dispositivo.';
+    $('notaAbrir').className = 'note ok';
+  });
+
+  window.addEventListener('offline', function () {
+    nota('Sin internet. Solo se verán las áreas de los archivos cargados.', '');
+    refrescarLista();
+  });
+
+  if (!GeolocationService.isSupported()) {
+    btnWatch.disabled = true; nota('Este navegador no soporta geolocalización.', 'error');
+  } else if (!window.isSecureContext) {
+    nota('Abre la página en https:// o localhost: el GPS no funciona en file://', 'error');
+  } else {
+    geo.permission().then(function (e) {
+      if (e === 'granted') { geo.start(); sync(); }
+      else if (e === 'denied') nota('Permiso bloqueado. Habilítalo en ajustes del sitio.', 'error');
+    });
+  }
+})();
+</script>
+</body>
+</html>
